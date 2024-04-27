@@ -19,18 +19,23 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"log"
+	"sync"
+	"time"
 )
 
 // SessionManager keeps track of all sessions from creation, updating
 // to destroying.
 type SessionManager struct {
 	sessions map[string]Session
+	mutex    sync.Mutex
 }
 
 // Session stores the session's data
 type Session struct {
 	Data map[string]interface{}
+	Time time.Time
 }
 
 // NewSessionManager creates a new sessionManager
@@ -38,6 +43,8 @@ func NewSessionManager() *SessionManager {
 	m := &SessionManager{
 		sessions: make(map[string]Session),
 	}
+
+	go cleanExpiredSession(m)
 
 	return m
 }
@@ -49,8 +56,12 @@ func (m *SessionManager) CreateSession() (string, error) {
 		return "", err
 	}
 
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
 	m.sessions[sessionID] = Session{
 		Data: make(map[string]interface{}),
+		Time: time.Now(),
 	}
 
 	return sessionID, nil
@@ -63,6 +74,9 @@ var ErrSessionNotFound = errors.New("SessionID does not exists")
 // GetSessionData returns data related to session if sessionID is
 // found, errors otherwise
 func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{}, error) {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
 	session, ok := m.sessions[sessionID]
 	if !ok {
 		return nil, ErrSessionNotFound
@@ -72,6 +86,9 @@ func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{
 
 // UpdateSessionData overwrites the old session data with the new one
 func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]interface{}) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
 	_, ok := m.sessions[sessionID]
 	if !ok {
 		return ErrSessionNotFound
@@ -80,37 +97,53 @@ func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]int
 	// Hint: you should renew expiry of the session here
 	m.sessions[sessionID] = Session{
 		Data: data,
+		Time: time.Now(),
 	}
 
 	return nil
 }
 
+func cleanExpiredSession(m *SessionManager) {
+	for {
+		m.mutex.Lock()
+		fmt.Println("Cleaning expired sessions...")
+
+		for key, session := range m.sessions {
+			if time.Since(session.Time) > 5*time.Second {
+				delete(m.sessions, key)
+			}
+		}
+
+		m.mutex.Unlock()
+		time.Sleep(time.Second)
+	}
+}
+
 func main() {
 	// Create new sessionManager and new session
 	m := NewSessionManager()
+
+	// Create a new session
 	sID, err := m.CreateSession()
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	log.Println("Created new session with ID", sID)
 
 	// Update session data
 	data := make(map[string]interface{})
 	data["website"] = "longhoang.de"
-
 	err = m.UpdateSessionData(sID, data)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	log.Println("Update session data, set website to longhoang.de")
+	log.Println("Updated session data for session ID", sID)
 
 	// Retrieve data from manager again
 	updatedData, err := m.GetSessionData(sID)
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	log.Println("Get session data:", updatedData)
+
 }
